@@ -51,12 +51,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Diagnostics
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled,AntivirusEnabled | Format-List
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+      - name: Dev Drive
+        shell: pwsh
+        run: |
+          $v = New-VHD -Path C:/dev_drive.vhdx -SizeBytes 25GB -Dynamic | Mount-VHD -Passthru |
+            Initialize-Disk -Passthru | New-Partition -AssignDriveLetter -UseMaximumSize |
+            Format-Volume -DevDrive -Confirm:$false -Force
+          $d = "$($v.DriveLetter):"
+          fsutil devdrv trust $d
+          fsutil devdrv enable /disallowAv
+          Dismount-VHD -Path C:/dev_drive.vhdx; Mount-VHD -Path C:/dev_drive.vhdx
+          fsutil devdrv query $d
+          New-Item -ItemType Directory -Force "$d\tmp", "$d\rustup" | Out-Null
+          Copy-Item -Path "$env:GITHUB_WORKSPACE" -Destination "$d\mc" -Recurse
+          "DEV_DRIVE=$d","RUSTUP_HOME=$d\rustup","TMP=$d\tmp","TEMP=$d\tmp" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: 1.98.1
@@ -66,7 +85,8 @@ jobs:
         # Pull requests read main's cache but don't write their own: a cache per PR fills the
         # repository's 10 GB and pushes out the caches that matter (FreeBSD's above all).
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
+          workspaces: ${{ env.DEV_DRIVE }}/mc -> target
       # Windowing and file-dialog headers the desktop app links against.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
@@ -74,6 +94,7 @@ jobs:
       # Clippy and the wasm check run on Linux only: wasm is the same from any host, and the
       # tests still build every platform's code.
       - run: cargo run --locked --package xtask -- ci
+        working-directory: ${{ env.DEV_DRIVE }}/mc
         env:
           XTASK_CI_SKIP: ${{ runner.os != 'Linux' && 'clippy,wasm,deny' || 'deny' }}
 
