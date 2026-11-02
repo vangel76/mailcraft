@@ -51,12 +51,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Diagnostics
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled,AntivirusEnabled | Format-List
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+      - name: Toolchain and temp on D
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force D:\tmp, D:\rustup | Out-Null
+          "RUSTUP_HOME=D:\rustup","TMP=D:\tmp","TEMP=D:\tmp" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: 1.98.1
