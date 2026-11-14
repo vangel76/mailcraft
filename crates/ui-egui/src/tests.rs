@@ -2087,6 +2087,11 @@ fn imported_mail_for_a_microsoft_account_goes_to_a_local_folder_and_says_how_it_
     let inbox = a.session.mailbox.folder_of_kind(account, mailcraft_model::FolderKind::Inbox).unwrap();
     let id = first_message(&mut a);
     let eml = a.execute("file.exportMessage", json!({"id": id})).unwrap();
+    // While the mailbox holds it, it isn't imported again (#1401), and that is said.
+    a.run("file.import", json!({"name": "in.eml", "data": eml["data"], "folder": inbox})).unwrap();
+    let said = a.status_msg.as_ref().map(|(text, _)| text.clone()).unwrap_or_default();
+    assert_eq!(said, "Nothing new imported: 1 message was already here");
+    a.session.mailbox.forget_message(id).unwrap();
     let r = a.run("file.import", json!({"name": "in.eml", "data": eml["data"], "folder": inbox})).unwrap();
     let said = a.status_msg.as_ref().map(|(text, _)| text.clone()).unwrap_or_default();
     assert_eq!(said, "Imported 1 message into a local folder: move it into the account to put it on Microsoft's server");

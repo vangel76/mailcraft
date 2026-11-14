@@ -408,6 +408,25 @@ fn large_and_hostile_input_is_read_quickly() {
     let _ = parse(&m);
     let _ = parse_mbox(&b"From \r\n".repeat(100_000));
     let _ = parse_mbox(&b">From x 12:34\r\n\r\nFrom y 12:34\r\n".repeat(30_000));
+    let _ = crate::count_mbox(&b"From \r\n".repeat(100_000));
+}
+
+/// (#1401) The count asked about before an import is the count the import reads.
+#[test]
+fn an_mbox_is_counted_as_it_is_read() {
+    let messages: Vec<crate::Message> = (0..5)
+        .map(|i| {
+            let mut m = parse(format!("Subject: Plans {i}\r\nFrom: bo@example.org\r\n\r\nFrom the start\r\n").as_bytes());
+            m.message_id = format!("m{i}@example.org");
+            m
+        })
+        .collect();
+    let refs: Vec<&crate::Message> = messages.iter().collect();
+    let mbox = write_mbox(&refs, &WriteOptions::default());
+    assert_eq!(crate::count_mbox(&mbox), parse_mbox(&mbox).len());
+    assert_eq!(crate::count_mbox(&mbox), 5);
+    assert_eq!(crate::count_mbox(b""), 0);
+    assert_eq!(crate::count_mbox(b"Subject: no separator\r\n\r\nbody\r\n"), 1);
 }
 
 // ---- generators ----

@@ -2391,14 +2391,20 @@ fn files_round_trip() {
     let eml = run(&mut s, "file.exportMessage", json!({"id": id}));
     assert_eq!(eml["name"], "Homepage mockups, round three.eml");
     let archive = kind(&s, FolderKind::Archive);
+    // (The same mail still in the mailbox would be left out, #1401: it is gone first.)
+    let r = run(&mut s, "file.import", json!({"name": "in.eml", "data": eml["data"], "folder": archive}));
+    assert_eq!((r["messages"].as_u64(), r["already"].as_u64()), (Some(0), Some(1)));
+    let removed = s.mailbox.forget_message(id).unwrap();
+    let orig = &removed;
     let r = run(&mut s, "file.import", json!({"name": "in.eml", "data": eml["data"], "folder": archive}));
     let copy = s.mailbox.message(r["ids"][0].as_u64().unwrap()).unwrap();
-    let orig = s.mailbox.message(id).unwrap();
     assert_eq!(
         (copy.folder, &copy.subject, &copy.from, &copy.to, &copy.body.text, copy.attachments.len()),
         (archive, &orig.subject, &orig.from, &orig.to, &orig.body.text, 1)
     );
     assert_eq!(copy.attachments[0].data, orig.attachments[0].data);
+    // (Back where it was, for what follows.)
+    s.mailbox.add_message(removed.clone()).unwrap();
     // Selected, it is shown where it went (#485).
     assert_eq!(s.view.folder, archive);
     run(&mut s, "folder.select", json!({"kind": "inbox"}));

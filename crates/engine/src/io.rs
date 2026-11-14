@@ -442,6 +442,41 @@ fn show_opened(s: &mut Session, id: Id) {
     s.show_selected();
 }
 
+/// How many messages a file of mail holds, as [`import`] would take them, without reading them
+/// (for a question asked before an import, #1401): one for a message file, the separators of an
+/// mbox file (at most [`MAX_IMPORT_MESSAGES`]); `None` for any other file.
+pub fn count_messages(name: &str, bytes: &[u8]) -> Option<usize> {
+    match Format::detect(name, bytes)? {
+        Format::Eml => Some(1),
+        Format::Mbox => Some(mailcraft_mime_model::count_mbox(bytes).min(MAX_IMPORT_MESSAGES)),
+        _ => None,
+    }
+}
+
+/// The kind of account the folder an import was meant for belongs to, as the log names it (#1401).
+fn kind_name(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::Local => "this computer",
+        AccountKind::Imap => "an IMAP account",
+        AccountKind::Microsoft => "a Microsoft account",
+        AccountKind::Jmap => "a JMAP account",
+        AccountKind::Exchange => "an Exchange server account",
+        AccountKind::Unknown => "an account of a newer MailCraft",
+    }
+}
+
+/// The same, as the answer of `file.import` names it (`account`).
+fn kind_word(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::Local => "local",
+        AccountKind::Imap => "imap",
+        AccountKind::Microsoft => "microsoft",
+        AccountKind::Jmap => "jmap",
+        AccountKind::Exchange => "exchange",
+        AccountKind::Unknown => "unknown",
+    }
+}
+
 /// Bring a file's contents into the mailbox: messages go to `folder` (default: the folder in
 /// view, or the Inbox), events to a calendar on this computer (#1050), contacts and to-dos to their lists.
 pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> Result<Value, CmdError> {
@@ -483,10 +518,13 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
             if messages.is_empty() {
                 return Err(failed!("{name} has no messages", name));
             }
-            // Mail imported for a Microsoft account goes to a local folder, which is shown (R3
-            // spec S30); moved into the account from there, it is put on the server (#451).
-            let microsoft = s.mailbox.folder(folder).and_then(|f| s.mailbox.account(f.account)).is_some_and(|a| a.kind == AccountKind::Microsoft);
-            let folder = if microsoft {
+            // Mail imported for an account that a server keeps goes to a local folder, which is
+            // shown (R3 spec S30, #1401): kept among the server's mail, it would look like the
+            // server's and never be compared with it. Moved into a Microsoft or an IMAP account
+            // from there, it is put on the server (#451).
+            let kind = s.mailbox.folder(folder).and_then(|f| s.mailbox.account(f.account)).map_or(AccountKind::Local, |a| a.kind);
+            let served = kind != AccountKind::Local;
+            let folder = if served {
                 let drafts = s.mailbox.folder(folder).is_some_and(|f| f.kind == FolderKind::Drafts);
                 let local = s.mailbox.imported_folder(drafts)?;
                 s.view.folder = local;
@@ -497,8 +535,21 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
                 folder
             };
             let drafts = s.mailbox.folder(folder).is_some_and(|f| f.kind == FolderKind::Drafts);
+            // What the mailbox holds already, anywhere, by what it is: the same mail again is left
+            // out (a folder exported and dropped back on the window, its copies going to Imported,
+            // would otherwise come in whole the first time), and so is a message the file holds
+            // twice (#1401). One index, built once. One with no Message-ID or no date is never
+            // taken for another, and always comes in.
+            let mut here = crate::cmd::imported_dupes::index(&s.mailbox);
             let mut ids = Vec::new();
+            let mut already = 0usize;
             for mut m in messages {
+                if let Some(key) = crate::cmd::imported_dupes::identity(&m)
+                    && !here.insert(key)
+                {
+                    already += 1;
+                    continue;
+                }
                 m.id = 0;
                 m.uid = 0;
                 m.folder = folder;
@@ -511,6 +562,9 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
                 }
                 ids.push(s.mailbox.add_message(m)?);
             }
+            let format_name = if format == Format::Eml { "eml" } else { "mbox" };
+            // What came in, for the log: never a name, an address or a subject.
+            log::info!("import: {format_name}, {} imported, {already} already there, meant for a folder of {}", ids.len(), kind_name(kind));
             if let Some(last) = ids.last() {
                 // What a search in view finds is asked of the mailbox with them in it.
                 s.list_due();
@@ -519,9 +573,17 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
                 // leaves it out.
                 s.show_selected();
             }
-            Ok(
-                json!({"format": if format == Format::Eml { "eml" } else { "mbox" }, "messages": ids.len(), "ids": ids, "folder": folder, "local": microsoft, "drafts": drafts, "stoppedAfter": stopped.then_some(ids.len())}),
-            )
+            Ok(json!({
+                "format": format_name,
+                "messages": ids.len(),
+                "already": already,
+                "ids": ids,
+                "folder": folder,
+                "local": served,
+                "account": kind_word(kind),
+                "drafts": drafts,
+                "stoppedAfter": stopped.then_some(ids.len()),
+            }))
         }
         Format::Ics => {
             let text = String::from_utf8_lossy(bytes);
@@ -581,6 +643,7 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
                 s.view.date = first.start.date;
                 s.sel.event = Some(first.id);
             }
+            log::info!("import: ics, {} events ({updated} replacing one already here), {} tasks, into this computer", events.len(), tasks.len());
             // (`notes`: what was unclear about a time zone in the file, for the owner to read.)
             Ok(json!({"format": "ics", "events": events.len(), "tasks": tasks.len(), "updated": updated, "method": file.method, "notes": notes}))
         }
@@ -594,6 +657,7 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
                 c.id = 0;
                 ids.push(s.mailbox.add_contact(c));
             }
+            log::info!("import: vcf, {} contacts, into this computer", ids.len());
             s.sel.contact = ids.first().copied();
             if let Some(first) = s.sel.contact {
                 crate::cmd::people::reveal(s, first);
