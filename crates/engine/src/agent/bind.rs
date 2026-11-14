@@ -136,6 +136,7 @@ pub fn object(id: &str) -> Option<Object> {
         | "ui.downloadPicturesFromContacts"
         | "ui.senderImages"
         | "ui.desktopAlerts"
+        | "ui.closeToTray"
         | "ui.repliesInWindow"
         | "ui.updateCheck"
         | "ui.updateInstall"
