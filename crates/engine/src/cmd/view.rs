@@ -35,6 +35,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.todoBar", "To-Do Bar", "View › Layout", todo_bar).reads().params(
             r#"{"part": "calendar"|"people"|"tasks"|"off", "value"?: bool (default: toggle), "module"?: "mail"|"calendar"|"people"|"tasks" (default: the one in front)} — the To-Do Bar beside that module: its date navigator and next appointments, its favourite contacts, its tasks, each on or off; "off" closes it. Each module keeps its own. Answers what that module's bar shows"#,
         ),
+        CommandSpec::new("view.navigationBar", "Navigation Bar", "View › Layout", navigation_bar)
+            .reads()
+            .params(r#"{"value": "bar"|"foot"} — the switch between Mail, Calendar, People and Tasks as the bar of icons down the window's left edge, or as a row of names at the foot of the pane on the left, where older mail programs had it (#1174)"#),
         CommandSpec::new("view.conversations", "Show as Conversations", "View › Messages", conversations).reads().params(TOGGLE),
         CommandSpec::new("view.sort", "Arrange By", "View › Arrangement", sort)
             .reads()
@@ -113,6 +116,16 @@ fn gmail_categories(s: &mut Session, v: &Value) -> CmdResult {
         _ => return Err(bad("`value` is folders or tabs")),
     };
     Ok(json!({"value": if s.view.gmail_tabs { "tabs" } else { "folders" }}))
+}
+
+/// `view.navigationBar`: where the switch between the modules is (#1174).
+fn navigation_bar(s: &mut Session, v: &Value) -> CmdResult {
+    s.view.nav_foot = match p::req_str(v, "value")? {
+        "bar" => false,
+        "foot" => true,
+        _ => return Err(bad("`value` is bar or foot")),
+    };
+    Ok(json!({"value": if s.view.nav_foot { "foot" } else { "bar" }}))
 }
 
 fn folder_pane(s: &mut Session, v: &Value) -> CmdResult {
