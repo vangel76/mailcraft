@@ -32,6 +32,8 @@ mod browser;
 #[cfg(test)]
 mod calendar_flow;
 mod clipboard;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod clipboard_mime;
 #[cfg(test)]
 mod control_challenge_flow;
 mod control_server;
@@ -101,6 +103,7 @@ mod system_locale;
 mod system_motion;
 #[cfg(test)]
 mod token_renew_flow;
+mod tray;
 #[cfg(test)]
 mod unconfirmed_flow;
 #[cfg(test)]
@@ -133,6 +136,7 @@ struct App(
     file_dialogs::Launcher,
     Option<single_instance::Guard>,
     Option<HostUpdates>,
+    tray::Tray,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
     #[cfg(target_os = "macos")] Option<menubar::MenuBar>,
 );
@@ -165,7 +169,7 @@ impl HostUpdates {
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.6, &mut self.0, ctx);
+        apple_events::poll(&self.7, &mut self.0, ctx);
         // MailCraft was started again (the shortcut, a `mailto:` link, a file opened from the
         // file manager): what it was started with opens here, and the window comes forward.
         if let Some(asked) = self.4.as_ref().and_then(single_instance::Guard::handed_over) {
@@ -180,7 +184,7 @@ impl eframe::App for App {
         }
         // The menu bar's choices run before the frame's own work (macOS).
         #[cfg(target_os = "macos")]
-        if let Some(bar) = &mut self.7 {
+        if let Some(bar) = &mut self.8 {
             bar.pump(&mut self.0, ctx);
         }
         self.0.logic(ctx);
@@ -209,7 +213,9 @@ impl eframe::App for App {
         open_pages(ctx, frame);
         // Leaving (the close button, Quit, the Dock): a message being written asks first, then
         // the platform's own way out (`quit`). Last in `logic`, which runs while minimized too.
-        quit::on_frame(ctx, &mut self.0);
+        self.6.pump(ctx, &mut self.0);
+        quit::on_frame(ctx, &mut self.0, self.6.available());
+        self.6.after_frame(ctx);
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         // On Linux and the BSDs, the desktop's light or dark preference (`desktop_theme`), for
@@ -217,6 +223,12 @@ impl eframe::App for App {
         #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))]
         if let Some(desktop) = DESKTOP_THEME.get() {
             desktop.apply(raw);
+        }
+        // Under Wayland the clipboard keys come as key events, to be turned into cut, copy and
+        // paste here, where a picture on the clipboard can be seen (`mailcraft_ui_egui::paste_keys`, #1217).
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if self.0.services.clipboard_keys {
+            mailcraft_ui_egui::paste_keys::translate(&mut raw.events, self.0.services.clipboard.as_deref());
         }
         self.0.raw_input_hook(raw);
     }
@@ -637,11 +649,19 @@ impl winit::application::ApplicationHandler<eframe::UserEvent> for WithTokens<'_
 
 /// Run the window: on Linux and FreeBSD on an event loop of our own, so that the activation
 /// tokens reach `WithTokens`; elsewhere as eframe runs it.
-fn run_window(options: eframe::NativeOptions, creator: eframe::AppCreator<'_>) -> eframe::Result {
+fn run_window(options: eframe::NativeOptions, creator: eframe::AppCreator<'_>, close_to_tray: bool) -> eframe::Result {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         let _ = BROWSER.set(browser::Browser::new(std::sync::Arc::new(browser::Desktop)));
-        let event_loop = winit::event_loop::EventLoop::<eframe::UserEvent>::with_user_event().build()?;
+        let mut builder = winit::event_loop::EventLoop::<eframe::UserEvent>::with_user_event();
+        // winit 0.30's native Wayland set_visible is a no-op. X11 (including XWayland)
+        // lets a close really hide the window, removing its taskbar button. Both backends
+        // are already built; pure Wayland still runs, with close-to-tray unavailable.
+        if tray::prefer_x11(close_to_tray, tray::x11_reachable) {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            builder.with_x11();
+        }
+        let event_loop = builder.build()?;
         // eframe keeps a start-up failure to itself on this path: the app is only created once
         // the window is, so a loop that ends without having created it failed to start.
         let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -659,7 +679,10 @@ fn run_window(options: eframe::NativeOptions, creator: eframe::AppCreator<'_>) -
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-    eframe::run_native("MailCraft", options, creator)
+    {
+        let _ = close_to_tray;
+        eframe::run_native("MailCraft", options, creator)
+    }
 }
 
 /// Sign an account's owner in: quietly with what was kept from last time when there is any, on
@@ -1056,6 +1079,7 @@ fn services(
     let (sync_ctx, sign_in_ctx, graph_ctx, mx_ctx, test_ctx) = (ctx.clone(), ctx.clone(), ctx.clone(), ctx.clone(), ctx);
     let sync_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel = sync_cancel.clone();
+    let idle_ctx = tasks_ctx.clone();
     // The host: what the platform gives the program, held by the threads that run its jobs. The
     // desktop's platform asks the window, by message, for what only the window may do.
     let platform_calls = mailcraft_ui_egui::platform::PlatformCalls::default();
@@ -1096,6 +1120,32 @@ fn services(
             rx
         })),
         sync_cancel,
+        // Waiting for new mail in IDLE (#276): one thread an account, which ends when its flag is set.
+        idle: Some(Box::new(move |request| {
+            let (tx, notes) = std::sync::mpsc::sync_channel(16);
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (flag, wake) = (stop.clone(), idle_ctx.clone());
+            let spawned = std::thread::Builder::new().name("idle".into()).spawn(move || {
+                mailcraft_net::idle::watch(&request, &flag, &mut |note| {
+                    use mailcraft_model::sync::IdleNote;
+                    match note {
+                        // What matters is that there is news, not how often it was said.
+                        IdleNote::Arrived => {
+                            let _ = tx.try_send(note);
+                        }
+                        IdleNote::Ended(_) => {
+                            let _ = tx.send(note);
+                        }
+                    }
+                    wake.request_repaint();
+                });
+            });
+            // A dropped sender reads as "ended without a word" in the app.
+            if let Err(e) = spawned {
+                log::error!("couldn't start the wait for new mail: {e}");
+            }
+            mailcraft_ui_egui::IdleWatch { stop, notes }
+        })),
         sign_in: Some(Box::new(move |request| {
             let ctx = sign_in_ctx.clone();
             background(&sign_in_ctx, "sign-in", move || sign_in(&ctx, request))
@@ -1248,7 +1298,7 @@ fn services(
         alert: alerts::host(alert_ctx),
         open_page: Some(Box::new(open_in_browser)),
         open_page_waiting: Some(std::sync::Arc::new(open_in_browser)),
-        clipboard: clipboard::board(),
+        clipboard: clipboard::board(None),
         // Help › Copy Diagnostics: the version, the platform and the redacted end of the logs.
         diagnostics: Some(Box::new(|| diagnostics::report(env!("CARGO_PKG_VERSION"), build_sha(), log_dir().filter(|_| prefs_enabled()).as_deref()))),
         // Help › Report a Problem › Send report (#956), on the owner's click alone: the report the
@@ -1530,11 +1580,23 @@ fn main() -> eframe::Result {
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
+    // Under Wayland the window layer's clipboard can't see a picture or HTML (in the Flatpak it
+    // has no clipboard of its own at all): the clipboard keys are handled by `mailcraft_ui_egui::paste_keys` (#1217).
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    let clipboard_keys = mailcraft_ui_egui::paste_keys::wayland_session(
+        std::env::var("WAYLAND_SOCKET").ok().as_deref(),
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+    );
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    if clipboard_keys {
+        options.clipboard_shortcuts = false;
+    }
     // Before eframe creates the wgpu instance: default Windows to DirectX 12 only, or OpenGL when
     // DirectX 12 has no GPU driver (see graphics.rs).
     #[cfg(target_os = "windows")]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
     let (prefs, settings_unread) = load_prefs();
+    let close_to_tray = prefs.as_ref().is_some_and(|ui| ui.close_to_tray);
     let restored = prefs.as_ref().and_then(|ui| ui.window).and_then(WindowGeometry::sanitized);
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
@@ -1576,6 +1638,8 @@ fn main() -> eframe::Result {
             let arriving = launch::start(move || launch::first_mailbox(sample, mailbox_path, &reading), move || wake.request_repaint());
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let ctx = cc.egui_ctx.clone();
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            let wayland_display = clipboard::wayland_display(cc);
             let (first_prefs, host_updates) = (prefs.clone(), updates.clone());
             let build: mailcraft_ui_egui::opening::Build = Box::new(move |arrival| {
                 let (mailbox, path, unavailable, unchecked, damaged) =
@@ -1591,6 +1655,12 @@ fn main() -> eframe::Result {
                 let mut services = services(file_dialog, ctx.clone(), kept_pictures, host_updates.as_ref());
                 services.window_identity =
                     Some(mailcraft_ui_egui::windows::WindowIdentity { icon: app_icon().map(std::sync::Arc::new), app_id: Some(APP_ID.into()) });
+                // Under Wayland the clipboard goes through the window's own connection (#1217).
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                {
+                    services.clipboard = clipboard::board(wayland_display);
+                    services.clipboard_keys = clipboard_keys;
+                }
                 services.update_start = update_start;
                 services.claim_mailbox =
                     claimer.map(|c| Box::new(move |path: &std::path::Path| c.claim(path)) as Box<dyn Fn(&std::path::Path) -> bool>);
@@ -1690,12 +1760,14 @@ fn main() -> eframe::Result {
                 dialogs,
                 guard,
                 updates,
+                tray::Tray::new(&cc.egui_ctx, tray::can_hide(cc)),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
                 #[cfg(target_os = "macos")]
                 menu_bar,
             )))
         }),
+        close_to_tray,
     )
 }
 

@@ -23,7 +23,8 @@ const NOW: i64 = 1_791_993_600;
 /// to answer. The password is known when `password` is.
 fn window(password: bool) -> (MailApp, Id, Jobs) {
     let mut app = MailApp::new(Session::at(mailcraft_model::Mailbox::default(), NOW, 0), Services::default());
-    (app.autosave, app.auto_sync) = (false, false);
+    app.autosave = false;
+    app.session.driver.set_auto_sync(false);
     let account =
         app.execute("account.add", json!({"email": "ada@mail.example", "incoming": {"host": "imap.mail.example"}})).unwrap()["id"].as_u64().unwrap();
     app.execute("account.edit", json!({"id": account, "keepOffline": "1m"})).unwrap();
@@ -114,5 +115,5 @@ fn without_the_password_nothing_is_asked_of_the_server() {
     app.drive_fetch();
     assert!(jobs.lock().unwrap().is_empty());
     assert!(app.session.mailbox.message(waiting).unwrap().unfetched);
-    assert!(app.fetching.offline);
+    assert!(app.session.driver.fetch.offline);
 }
