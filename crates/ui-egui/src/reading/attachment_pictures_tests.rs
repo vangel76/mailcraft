@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: MailCraft contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Picture attachments shown as pictures (#834): which files count as pictures, the caps, the
-//! decoding off the window's thread, the switch and what it keeps.
+//! decoding off the window's thread, the choice in File › Options and what it keeps.
 
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use egui::PointerButton;
 use mailcraft_model::{Attachment, ContentRef};
 use serde_json::json;
 
-use super::attachment_pictures::{BOX, MAX_BROUGHT_IN, MAX_PREVIEWS, Thumbs, as_pictures, fit, may_be_picture, to_bring_in};
+use super::attachment_pictures::{BOX, MAX_BROUGHT_IN, MAX_PREVIEWS, Thumbs, as_pictures, chosen, fit, may_be_picture, to_bring_in};
 use super::images::MAX_PICTURE_BYTES;
 use super::tests::{gif, jpeg, png, webp};
 use crate::people_view::testing::{self, Window, click};
@@ -92,6 +92,45 @@ fn what_is_brought_in_from_disk_is_capped() {
     let half: Vec<Attachment> = heavy.into_iter().skip(1).collect();
     let files: Vec<(usize, &Attachment)> = half.iter().enumerate().collect();
     assert_eq!(to_bring_in(&files).len(), 1);
+}
+
+#[test]
+fn copies_of_a_chosen_picture_are_not_brought_in_with_it() {
+    // Thirty attachments of one content (a mailbox file and a .pst store it once and name it
+    // many times), some of them of no picture's type, and one other picture.
+    let same = ContentRef { sha256: [9; 32], len: 20 * 1024 * 1024 };
+    let mut a: Vec<Attachment> = (0..30)
+        .map(|i| {
+            let (name, mime) = if i % 5 == 4 { ("copy.bin", "application/pdf") } else { ("copy.jpg", "image/jpeg") };
+            Attachment { kept: Some(same), ..file(name, mime) }
+        })
+        .collect();
+    a.push(kept("other.png", "image/png", 1_000, 2));
+    let files: Vec<(usize, &Attachment)> = a.iter().enumerate().collect();
+    let wanted = to_bring_in(&files);
+    // The cap holds the chosen ones to four of them (96 MB of 20 MB each): the first four.
+    assert_eq!(wanted.len(), (MAX_BROUGHT_IN / same.len) as usize);
+    // What the session is given picks those files, in order, and no more of them.
+    let pick = chosen(&wanted);
+    let picked: Vec<usize> = a.iter().enumerate().filter(|(_, a)| pick(a)).map(|(i, _)| i).collect();
+    assert_eq!(picked, [0, 1, 2, 3]);
+    // Thirty small copies: the chosen are the first 24 that may be a picture, no more of them,
+    // and none that is of another type.
+    let small = ContentRef { sha256: [8; 32], len: 1_000 };
+    let b: Vec<Attachment> = (0..30)
+        .map(|i| {
+            let (name, mime) = if i % 5 == 4 { ("copy.bin", "application/pdf") } else { ("copy.jpg", "image/jpeg") };
+            Attachment { kept: Some(small), ..file(name, mime) }
+        })
+        .collect();
+    let files: Vec<(usize, &Attachment)> = b.iter().enumerate().collect();
+    let wanted = to_bring_in(&files);
+    assert_eq!(wanted.len(), MAX_PREVIEWS);
+    let pick = chosen(&wanted);
+    let picked: Vec<usize> = b.iter().enumerate().filter(|(_, a)| pick(a)).map(|(i, _)| i).collect();
+    assert_eq!(picked.len(), MAX_PREVIEWS);
+    assert!(picked.iter().all(|&i| i % 5 != 4), "{picked:?}");
+    assert_eq!(picked, b.iter().enumerate().filter(|(_, a)| may_be_picture(a)).take(MAX_PREVIEWS).map(|(i, _)| i).collect::<Vec<_>>());
 }
 
 #[test]
@@ -206,29 +245,26 @@ fn item(h: &Window, index: usize) -> egui::Rect {
 }
 
 #[test]
-fn the_switch_shows_picture_attachments_as_pictures() {
+fn picture_attachments_are_shown_as_pictures_unless_the_owner_turns_it_off() {
     let mut h = window_with_picture();
-    // Pictures at first, with the switch beside them: the picture is a picture, the PDF a chip.
+    // Pictures at first: the picture is a picture, the PDF a chip, and no switch beside them.
     assert!(h.state().ui.attachment_pictures);
     assert!(item(&h, 0).height() > 100.0, "{:?}", item(&h, 0));
     assert!(item(&h, 1).height() < 40.0);
     let (kept, decoded) = Thumbs::of(&h.ctx).lock().unwrap().counts();
     assert!(kept >= 1 && decoded == 1, "{kept} {decoded}");
+    assert!(h.state().hit.rect_in(0, "attachmentView", 0).is_none() && h.state().hit.rect_in(0, "attachmentView", 1).is_none());
     // Its `▾` is the chip's.
     assert!(h.state().hit.rect_in(0, "attachmentMenu", attachment_key(ID, 0)).is_some());
     // Names: chips, as classic Outlook shows them, for every message, and kept in ui.json.
-    let names = h.state().hit.rect_in(0, "attachmentView", 0).expect("the switch");
-    click(&mut h, names.center(), PointerButton::Primary, 1);
+    h.state_mut().execute("ui.attachmentPictures", json!({"value": false})).unwrap();
     h.run_steps(5);
-    assert!(!h.state().ui.attachment_pictures);
     assert!(item(&h, 0).height() < 40.0 && item(&h, 1).height() < 40.0);
     let saved = serde_json::to_value(&h.state().ui).unwrap();
     assert_eq!(saved["attachmentPictures"], false);
     // And back.
-    let pictures = h.state().hit.rect_in(0, "attachmentView", 1).expect("the switch");
-    click(&mut h, pictures.center(), PointerButton::Primary, 1);
+    h.state_mut().execute("ui.attachmentPictures", json!({"value": true})).unwrap();
     h.run_steps(5);
-    assert!(h.state().ui.attachment_pictures);
     assert!(item(&h, 0).height() > 100.0);
 }
 
@@ -247,17 +283,6 @@ fn a_double_click_on_the_picture_opens_it() {
     click(&mut h, at, PointerButton::Primary, 2);
     h.run_steps(3);
     assert_eq!(opened.lock().unwrap().as_slice(), ["IMG_20261108_101112.jpg"]);
-}
-
-#[test]
-fn no_switch_without_a_picture() {
-    let mut h = testing::window("view.mail");
-    let app = h.state_mut();
-    let _ = app.execute("ui.dismissReminder", json!({"all": true}));
-    app.session.mailbox.message_mut(ID).unwrap().attachments = vec![Attachment::new("notes.pdf", "application/pdf", b"%PDF".to_vec())];
-    app.run("mail.select", json!({"id": ID})).unwrap();
-    h.run_steps(5);
-    assert!(h.state().hit.rect_in(0, "attachmentView", 1).is_none());
 }
 
 #[test]
@@ -346,11 +371,10 @@ fn window_in_junk(in_subfolder: bool) -> Window {
 fn mail_in_junk_is_shown_by_names_only() {
     for in_subfolder in [false, true] {
         let h = window_in_junk(in_subfolder);
-        // The picture is a chip, nothing was decoded or looked at, and there is no switch.
+        // The picture is a chip, nothing was decoded or looked at.
         assert!(item(&h, 0).height() < 40.0 && item(&h, 1).height() < 40.0, "{in_subfolder}");
         assert_eq!(Thumbs::of(&h.ctx).lock().unwrap().counts(), (0, 0), "{in_subfolder}");
-        assert!(h.state().hit.rect_in(0, "attachmentView", 1).is_none() && h.state().hit.rect_in(0, "attachmentView", 0).is_none());
-        // The owner's switch is as it was.
+        // The owner's choice is as it was.
         assert!(h.state().ui.attachment_pictures);
     }
 }
@@ -376,17 +400,38 @@ fn a_message_with_very_many_attachments_costs_no_more_than_the_most_shown() {
     assert!(kept > 0);
 }
 
+/// The page of File › Options scrolled until the checkbox is in view, and its middle.
+fn checkbox_in_view(h: &mut Window) -> egui::Pos2 {
+    for _ in 0..6 {
+        let rect = h.state().hit.rect("attachmentPicturesOption", 0).expect("the checkbox");
+        let screen = h.ctx.content_rect();
+        if screen.shrink(60.0).contains(rect.left_center()) {
+            return rect.left_center() + egui::vec2(10.0, 0.0);
+        }
+        h.event(egui::Event::PointerMoved(screen.center()));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -300.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(45);
+    }
+    panic!("the checkbox can't be scrolled into view");
+}
+
 #[test]
 fn file_options_has_the_choice_as_a_checkbox() {
     let mut h = window_with_picture();
     h.state_mut().execute("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
     h.run_steps(4);
-    let at = h.state().hit.rect("attachmentPicturesOption", 0).expect("the checkbox").left_center() + egui::vec2(10.0, 0.0);
+    let at = checkbox_in_view(&mut h);
     assert!(h.state().ui.attachment_pictures);
     click(&mut h, at, PointerButton::Primary, 1);
     h.run_steps(3);
-    assert!(!h.state().ui.attachment_pictures, "off, as the switch would put it");
-    let at = h.state().hit.rect("attachmentPicturesOption", 0).unwrap().left_center() + egui::vec2(10.0, 0.0);
+    assert!(!h.state().ui.attachment_pictures, "off");
+    let at = checkbox_in_view(&mut h);
     click(&mut h, at, PointerButton::Primary, 1);
     h.run_steps(3);
     assert!(h.state().ui.attachment_pictures);

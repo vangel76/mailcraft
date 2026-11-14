@@ -3,21 +3,21 @@
 //! Pictures that come as attachments, shown as pictures in the message (#834).
 //!
 //! A photo sent from a phone comes as a file, not written into the body, and as a chip it says
-//! nothing of what is in it. With the switch where the attachments are (`ui.attachmentPictures`,
-//! kept in `ui.json`, on unless the owner turns it off; classic Outlook shows chips), each
+//! nothing of what is in it. With the choice in File › Options (`ui.attachmentPictures`, kept in
+//! `ui.json`, on unless the owner turns it off; classic Outlook shows chips), each
 //! attachment that is a PNG, JPEG, GIF or WebP by its own bytes is a small picture, scaled down
 //! to fit; a double-click opens it and its `▾` menu is the chip's. Everything else stays a chip.
 //!
 //! The bytes are hostile, as every attachment's: whether a file is a picture is told by its
 //! bytes alone ([`images::probe`], within the reading pane's caps, never by its name or its
 //! declared type), and it is decoded by [`images::decode`] with the same caps, off the window's
-//! thread (one at a time), into a small texture. Mail in Junk E-mail is shown by names only, and
-//! File › Options has the choice as a checkbox beside the switch. Only the first [`MAX_PREVIEWS`] files of a message
-//! whose type or name says they may be pictures are looked at, so that a message with a thousand
-//! attachments costs no more a frame than one with a few. Nothing is fetched: a file that is kept on disk
-//! beside the mailbox is brought in when its declared type or name says it may be a picture, at
-//! most [`MAX_PREVIEWS`] of a message and [`MAX_BROUGHT_IN`] bytes, through the session's own
-//! memory budget.
+//! thread (one at a time), into a small texture. Mail in Junk E-mail is shown by names only. Only
+//! the first [`MAX_PREVIEWS`] files of a message whose type or name says they may be pictures
+//! are looked at, so that a message with a thousand attachments costs no more a frame than one
+//! with a few. Nothing is fetched: a file that is kept on disk beside the mailbox is brought in
+//! when its declared type or name says it may be a picture, at most [`MAX_PREVIEWS`] of a
+//! message and [`MAX_BROUGHT_IN`] bytes, through the session's own memory budget, and only the
+//! very files chosen: copies of one picture (one content, many attachments) are not brought in.
 
 use std::sync::{Arc, Mutex, Weak};
 
@@ -50,14 +50,6 @@ const MIN_WIDTH: f32 = 120.0;
 /// Room round the picture, and the height of the name and size under it.
 const PAD: f32 = 6.0;
 const CAPTION: f32 = 32.0;
-
-/// How the attachments of a message are shown.
-pub struct Looks {
-    /// For each file, in order: its size in pixels when it is shown as a picture, `None` for a chip.
-    pub items: Vec<Option<[u32; 2]>>,
-    /// Whether the switch between chips and pictures is offered: some file is, or may be, a picture.
-    pub switch: bool,
-}
 
 /// Whether an attachment may be a picture that is shown, by what the message says of it: its
 /// declared type, or for a file of no particular type its name. Only to choose which files kept
@@ -106,6 +98,22 @@ pub fn to_bring_in(files: &[(usize, &Attachment)]) -> Vec<ContentRef> {
     out
 }
 
+/// What `Session::load_where` is given to bring in the files [`to_bring_in`] chose, `wanted`: only
+/// those very files. One that has the content of a chosen file (a copy: one content, named by
+/// many attachments) is not chosen for that, nor is one that can't be a picture or one after the
+/// ones [`to_bring_in`] looked at. The files are asked about in order, as there, so that the
+/// first `wanted.len()` that match are the ones it chose.
+pub(super) fn chosen(wanted: &[ContentRef]) -> impl Fn(&Attachment) -> bool {
+    let left = std::cell::Cell::new(wanted.len());
+    move |a| {
+        let it = left.get() > 0 && may_be_picture(a) && a.kept.is_some_and(|k| wanted.contains(&k));
+        if it {
+            left.set(left.get() - 1);
+        }
+        it
+    }
+}
+
 /// Which of the files whose picture sizes are `sizes` (`None`: not a picture that is shown) are
 /// shown as pictures: the first [`MAX_PREVIEWS`].
 pub fn as_pictures(sizes: &[Option<[u32; 2]>]) -> Vec<Option<[u32; 2]>> {
@@ -131,17 +139,18 @@ pub fn fit(size: [u32; 2], room: Vec2) -> Vec2 {
     vec2((w * scale).round().max(1.0), (h * scale).round().max(1.0))
 }
 
-/// How the files of `m` are shown at `place`, and for those kept on disk that are to be shown
-/// as pictures, bring them in.
-pub(super) fn looks(app: &mut MailApp, ctx: &egui::Context, m: &Message, place: Place, files: &[(usize, &Attachment)]) -> Looks {
-    let chips = |switch| Looks { items: vec![None; files.len()], switch };
+/// How the files of `m` are shown at `place`: for each, in order, its size in pixels when it is
+/// shown as a picture, `None` for a chip. Those kept on disk that are to be shown as pictures are
+/// brought in.
+pub(super) fn looks(app: &mut MailApp, ctx: &egui::Context, m: &Message, place: Place, files: &[(usize, &Attachment)]) -> Vec<Option<[u32; 2]>> {
+    let chips = || vec![None; files.len()];
     if !matches!(place, Place::Pane | Place::Window(_)) {
-        return chips(false);
+        return chips();
     }
     // Mail in Junk E-mail, or in a folder under it, is shown by names only: no picture is looked
-    // at or brought in, and there is no switch.
-    if app.session.mailbox.in_junk(m.folder) {
-        return chips(false);
+    // at or brought in.
+    if app.session.mailbox.in_junk(m.folder) || !app.ui.attachment_pictures {
+        return chips();
     }
     let frame = images::frame(ctx);
     let thumbs = Thumbs::of(ctx);
@@ -160,14 +169,10 @@ pub(super) fn looks(app: &mut MailApp, ctx: &egui::Context, m: &Message, place: 
             thumbs.size(&a.data, frame)
         })
         .collect();
-    let switch = sizes.iter().any(Option::is_some) || files.iter().any(|(_, a)| !a.is_loaded() && may_be_picture(a));
-    if !app.ui.attachment_pictures {
-        return chips(switch);
-    }
     let items = as_pictures(&sizes).into_iter().zip(files).map(|(size, (_, a))| size.filter(|_| !thumbs.failed(&a.data))).collect();
     drop(thumbs);
     bring_in(app, ctx, m, files);
-    Looks { items, switch }
+    items
 }
 
 /// Bring in the files of `m` kept on disk that may be pictures ([`to_bring_in`]). One that can't
@@ -180,11 +185,12 @@ fn bring_in(app: &mut MailApp, ctx: &egui::Context, m: &Message, files: &[(usize
     if wanted.is_empty() {
         return;
     }
-    let failed_key = egui::Id::unique(("mailcraft-attachment-pictures-failed", m.id));
+    // (Ids are reused when another mailbox is opened: the opening is part of the key.)
+    let failed_key = egui::Id::unique(("mailcraft-attachment-pictures-failed", app.session.openings(), m.id));
     if ctx.data(|d| d.get_temp::<bool>(failed_key)).unwrap_or(false) {
         return;
     }
-    match app.session.load_where(m.id, |a| a.kept.is_some_and(|k| wanted.contains(&k))) {
+    match app.session.load_where(m.id, chosen(&wanted)) {
         // The message shown takes them up at the next frame.
         Ok(_) => ctx.request_repaint(),
         Err(_) => {
@@ -242,26 +248,6 @@ pub(crate) fn options(app: &mut MailApp, ui: &mut Ui) {
     if response.changed() {
         let _ = app.run("ui.attachmentPictures", json!({"value": on}));
     }
-}
-
-/// The switch between chips and pictures, for every message (`ui.attachmentPictures`).
-pub(super) fn switch(app: &mut MailApp, ui: &mut Ui, t: &Tokens) {
-    let on = app.ui.attachment_pictures;
-    let choices = [
-        (false, tl!("Names"), tl!("Show picture attachments by their names, in every message")),
-        (true, tl!("Pictures"), tl!("Show picture attachments as pictures, in every message")),
-    ];
-    ui.allocate_ui_with_layout(vec2(0.0, 38.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        for (pictures, label, tip) in choices {
-            let text = egui::RichText::new(label).font(regular(11.5)).color(if on == pictures { t.text } else { t.text_dim });
-            let button = ui.selectable_label(on == pictures, text).on_hover_text(tip);
-            app.hit.add("attachmentView", u64::from(pictures), button.rect);
-            if button.clicked() && on != pictures {
-                let _ = app.run("ui.attachmentPictures", json!({"value": pictures}));
-            }
-        }
-    });
 }
 
 /// What became of one picture.
@@ -423,7 +409,12 @@ impl Thumbs {
         let entry = self.entry(data, frame)?;
         entry.state = match image {
             Some(image) => State::Ready(ctx.load_texture("mailcraft-attachment-picture", image, egui::TextureOptions::LINEAR)),
-            None => State::Failed,
+            None => {
+                // A header that was fine and data that is not: the placeholder drawn in this
+                // frame gives way to the chip at the next one, which is asked for.
+                ctx.request_repaint();
+                State::Failed
+            }
         };
         match &entry.state {
             State::Ready(texture) => Some(texture.clone()),
