@@ -184,6 +184,58 @@ fn the_clean_up_removes_only_the_local_twins_and_undo_brings_them_back() {
 }
 
 #[test]
+fn an_imap_folder_exported_into_a_local_archive_comes_in_whole() {
+    // Kept on this computer before the server's copies are deleted: none of it is left out for
+    // being in the IMAP folder too.
+    let (mut s, _, inbox) = imap();
+    let data = export(&mut s, inbox);
+    let local = s.mailbox.local_account();
+    let archive = s.mailbox.add_folder(local, None, "Archive 2025").unwrap();
+    let r = import(&mut s, &data, archive);
+    assert_eq!((r["messages"].as_u64(), r["already"].as_u64(), r["local"].as_bool()), (Some(3), Some(0), Some(false)), "{r}");
+    assert_eq!(s.mailbox.messages_in(archive).count(), 3);
+    // Imported again into the archive: nothing more.
+    let again = import(&mut s, &data, archive);
+    assert_eq!(again["already"], 3);
+}
+
+#[test]
+fn a_copy_that_is_not_whole_does_not_keep_the_backup_out() {
+    let mut s = Session::new(Mailbox::with_local_account("", ""));
+    let inbox = s.mailbox.inbox().unwrap();
+    let damaged: [fn(&mut Message); 4] = [|m| m.incomplete = true, |m| m.not_downloaded = 50_000, |m| m.parts_removed = true, |m| m.unfetched = true];
+    for (n, damage) in (1..).zip(damaged) {
+        let mut m = Message { folder: inbox, ..mail(n) };
+        damage(&mut m);
+        s.mailbox.add_message(m).unwrap();
+    }
+    let backup: Vec<Message> = (1..=4).map(mail).collect();
+    let refs: Vec<&Message> = backup.iter().collect();
+    let data = crate::cmd::base64_encode(&mailcraft_mime_model::write_mbox(&refs, &Default::default()));
+    let r = import(&mut s, &data, inbox);
+    assert_eq!((r["messages"].as_u64(), r["already"].as_u64()), (Some(4), Some(0)), "{r}");
+}
+
+#[test]
+fn the_clean_up_keeps_a_copy_the_owner_changed() {
+    let (mut s, _, inbox) = imap();
+    let flagged = s.mailbox.add_message(Message { folder: inbox, flag: mailcraft_model::FlagStatus::Flagged, ..mail(1) }).unwrap();
+    let read = s.mailbox.add_message(Message { folder: inbox, read: true, ..mail(2) }).unwrap();
+    let categorised = s.mailbox.add_message(Message { folder: inbox, categories: vec!["Red category".into()], ..mail(3) }).unwrap();
+    let tasked = s.mailbox.add_message(Message { folder: inbox, ..mail(3) }).unwrap();
+    s.mailbox.add_task(mailcraft_model::Task { title: "Follow up".into(), message: Some(tasked), ..Default::default() });
+    let same = s.mailbox.add_message(Message { folder: inbox, ..mail(3) }).unwrap();
+    let r = s.run("mail.removeImportedDuplicates", &json!({})).unwrap();
+    assert_eq!((r["removed"].as_u64(), r["kept"].as_u64()), (Some(1), Some(4)), "{r}");
+    assert!(s.mailbox.message(same).is_none());
+    for id in [flagged, read, categorised, tasked] {
+        assert!(s.mailbox.message(id).is_some(), "{id} stays");
+    }
+    // The server's copies are as they were: nothing carried over.
+    assert!(s.mailbox.messages_in(inbox).filter(|m| m.uid != 0).all(|m| !m.read && m.categories.is_empty()));
+}
+
+#[test]
 fn the_clean_up_of_one_folder_leaves_the_others() {
     let (mut s, _, inbox) = imap();
     let twin = local_copy(&mut s, inbox, 1);

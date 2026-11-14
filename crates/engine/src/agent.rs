@@ -1391,7 +1391,7 @@ fn what_it_does(s: &Session, id: &str, params: &Value) -> String {
         // (#1401) Counted now: a different count on the yes is another question.
         "mail.removeImportedDuplicates" => {
             let folder = p::id_strict(params, "folder").ok().flatten();
-            let n = crate::cmd::imported_dupes::twins(&s.mailbox, folder).len();
+            let n = crate::cmd::imported_dupes::twins(&s.mailbox, folder).remove.len();
             let where_ = folder.and_then(|f| s.mailbox.folder(f)).map_or_else(|| "every folder".to_string(), |f| quoted(&f.name));
             format!(
                 "remove {} that only this computer has, beside the same mail from its server in {where_} (the server's copies are not touched, and nothing is sent)",

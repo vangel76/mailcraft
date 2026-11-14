@@ -477,31 +477,63 @@ fn kind_word(kind: AccountKind) -> &'static str {
     }
 }
 
-/// Bring a file's contents into the mailbox: messages go to `folder` (default: the folder in
-/// view, or the Inbox), events to a calendar on this computer (#1050), contacts and to-dos to their lists.
-pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> Result<Value, CmdError> {
-    let format = Format::detect(name, bytes).ok_or_else(|| failed!("{name}: not a message, calendar or contact file MailCraft reads", name))?;
+/// The folder mail from a file is meant for (#1401): `folder` (default: the folder in view, or the
+/// Inbox), but never an Outbox: with one in view the account's Drafts (or its Inbox), and one named
+/// outright is refused. `mail`: the file holds mail (for a calendar or contacts file only the
+/// folder is checked). Mail meant for a folder of an account a server keeps then lands on this
+/// computer ([`lands_in`]).
+pub fn mail_aimed_at(mb: &mailcraft_model::Mailbox, view_folder: Id, folder: Option<Id>, mail: bool) -> Result<Id, CmdError> {
     let explicit = folder.is_some();
     let folder = match folder {
-        Some(f) => s.mailbox.folder(f).map(|f| f.id).ok_or_else(|| failed!("no folder with id {id}", id = f))?,
-        None => s.mailbox.folder(s.view.folder).map(|f| f.id).or_else(|| s.mailbox.inbox()).ok_or_else(|| fail("the mailbox has no folders"))?,
+        Some(f) => mb.folder(f).map(|f| f.id).ok_or_else(|| failed!("no folder with id {id}", id = f))?,
+        None => mb.folder(view_folder).map(|f| f.id).or_else(|| mb.inbox()).ok_or_else(|| fail("the mailbox has no folders"))?,
     };
     // Mail brought in from a file is mail the owner has not written: it never lands where the next
     // Send/Receive would send it. With an Outbox in view it goes to the account's Drafts instead
     // (or its Inbox); an Outbox named outright is refused.
-    let folder = if matches!(format, Format::Eml | Format::Mbox) && s.mailbox.is_send_queue(folder) {
+    if mail && mb.is_send_queue(folder) {
         if explicit {
             return Err(fail("Mail can't be imported into an Outbox: it would be sent. Choose another folder."));
         }
-        let account = s.mailbox.folder(folder).map_or(0, |f| f.account);
-        [FolderKind::Drafts, FolderKind::Inbox]
+        let account = mb.folder(folder).map_or(0, |f| f.account);
+        return [FolderKind::Drafts, FolderKind::Inbox]
             .into_iter()
-            .find_map(|kind| s.mailbox.folder_of_kind(account, kind))
-            .filter(|id| !s.mailbox.is_send_queue(*id))
-            .ok_or_else(|| fail("Mail can't be imported into an Outbox: it would be sent."))?
-    } else {
-        folder
-    };
+            .find_map(|kind| mb.folder_of_kind(account, kind))
+            .filter(|id| !mb.is_send_queue(*id))
+            .ok_or_else(|| fail("Mail can't be imported into an Outbox: it would be sent."));
+    }
+    Ok(folder)
+}
+
+/// Where mail meant for a folder lands ([`lands_in`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lands {
+    /// In this folder: the one meant, of this computer's, or this computer's Drafts.
+    Folder(Id),
+    /// In this computer's Imported folder (made when it isn't there yet).
+    Imported,
+}
+
+/// Where mail meant for `aimed` ([`mail_aimed_at`]) lands (#1401): there, for a folder of this
+/// computer's; for a folder of an account a server keeps, this computer's Drafts when it was
+/// meant for Drafts and there is one, else the Imported folder.
+pub fn lands_in(mb: &mailcraft_model::Mailbox, aimed: Id) -> Lands {
+    let Some(f) = mb.folder(aimed) else { return Lands::Folder(aimed) };
+    if mb.account(f.account).is_none_or(|a| a.kind == AccountKind::Local) {
+        return Lands::Folder(aimed);
+    }
+    let drafts = mb.accounts.iter().find(|a| a.kind == AccountKind::Local).and_then(|l| mb.folder_of_kind(l.id, FolderKind::Drafts));
+    match drafts {
+        Some(d) if f.kind == FolderKind::Drafts => Lands::Folder(d),
+        _ => Lands::Imported,
+    }
+}
+
+/// Bring a file's contents into the mailbox: messages go to `folder` (default: the folder in
+/// view, or the Inbox), events to a calendar on this computer (#1050), contacts and to-dos to their lists.
+pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> Result<Value, CmdError> {
+    let format = Format::detect(name, bytes).ok_or_else(|| failed!("{name}: not a message, calendar or contact file MailCraft reads", name))?;
+    let folder = mail_aimed_at(&s.mailbox, s.view.folder, folder, matches!(format, Format::Eml | Format::Mbox))?;
     let now = s.now();
     match format {
         Format::Mailbox => Err(bad(format!("{name} is a whole mailbox; open it with File › Open"))),
@@ -524,6 +556,7 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
             // from there, it is put on the server (#451).
             let kind = s.mailbox.folder(folder).and_then(|f| s.mailbox.account(f.account)).map_or(AccountKind::Local, |a| a.kind);
             let served = kind != AccountKind::Local;
+            let aimed = folder;
             let folder = if served {
                 let drafts = s.mailbox.folder(folder).is_some_and(|f| f.kind == FolderKind::Drafts);
                 let local = s.mailbox.imported_folder(drafts)?;
@@ -535,21 +568,22 @@ pub fn import(s: &mut Session, name: &str, bytes: &[u8], folder: Option<Id>) -> 
                 folder
             };
             let drafts = s.mailbox.folder(folder).is_some_and(|f| f.kind == FolderKind::Drafts);
-            // What the mailbox holds already, anywhere, by what it is: the same mail again is left
-            // out (a folder exported and dropped back on the window, its copies going to Imported,
-            // would otherwise come in whole the first time), and so is a message the file holds
-            // twice (#1401). One index, built once. One with no Message-ID or no date is never
-            // taken for another, and always comes in.
-            let mut here = crate::cmd::imported_dupes::index(&s.mailbox);
+            // What the folder it lands in holds already, whole, and, when it was sent to Imported
+            // instead, the folder it was meant for (a folder exported and dropped back on the
+            // window): the same mail again is left out, and so is a message the file holds twice
+            // (#1401). Never what is anywhere else: a folder exported to be kept in an archive of
+            // this computer's comes in whole. One index, built once; one with no Message-ID or no
+            // date is never taken for another, and always comes in.
+            let looked_in: Vec<Id> = if aimed == folder { vec![folder] } else { vec![folder, aimed] };
+            let mut here = crate::cmd::imported_dupes::Twins::of(&s.mailbox, &looked_in);
             let mut ids = Vec::new();
             let mut already = 0usize;
             for mut m in messages {
-                if let Some(key) = crate::cmd::imported_dupes::identity(&m)
-                    && !here.insert(key)
-                {
+                if here.holds(&m) {
                     already += 1;
                     continue;
                 }
+                here.add(&m);
                 m.id = 0;
                 m.uid = 0;
                 m.folder = folder;

@@ -707,6 +707,20 @@ fn an_mbox_is_read_one_message_at_a_time() {
 }
 
 proptest! {
+    /// (#1401) Any bytes: the count never panics, and is never fewer than the messages read.
+    #[test]
+    fn an_mbox_count_is_never_short_of_what_is_read(bytes in proptest::collection::vec(any::<u8>(), 0..4096)) {
+        prop_assert!(crate::count_mbox(&bytes) >= parse_mbox(&bytes).len());
+    }
+
+    /// (#1401) Messages written as an mbox are counted as many as they are.
+    #[test]
+    fn a_written_mbox_is_counted_whole(ms in proptest::collection::vec(message(), 0..8), opts in options()) {
+        let refs: Vec<&crate::Message> = ms.iter().collect();
+        let mbox = write_mbox(&refs, &opts);
+        prop_assert_eq!(crate::count_mbox(&mbox), parse_mbox(&mbox).len());
+    }
+
     #[test]
     fn list_headers_stay_under_the_caps(lines in proptest::collection::vec(("(To|Cc|Bcc|Reply-To|Keywords)", "[a-z@.,; <>]{0,3000}"), 0..60)) {
         let mut raw = String::new();

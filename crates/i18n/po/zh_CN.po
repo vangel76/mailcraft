@@ -7606,6 +7606,11 @@ msgid "Messages (.eml, .mbox), calendars (.ics) and contacts (.vcf)"
 msgstr "邮件（.eml、.mbox）、日历（.ics）和联系人（.vcf）"
 
 #. interface
+#: crates/ui-egui/src/files.rs
+msgid "Messages already in that folder are left out."
+msgstr ""
+
+#. interface
 #: crates/ui-egui/src/backstage.rs
 #, fuzzy
 msgid "Messages are shown without running anything in them, and the pictures a message keeps on the web are downloaded only when you ask. Passwords are kept in memory only while the app is open."
@@ -7658,11 +7663,6 @@ msgstr "从“{name}”移到“{to}”的邮件在“{name}”中仍有一份"
 #, fuzzy
 msgid "Messages on a Light Background"
 msgstr "邮件使用浅色背景"
-
-#. interface
-#: crates/ui-egui/src/files.rs
-msgid "Messages that are already in the mailbox are left out."
-msgstr ""
 
 #. interface
 #: crates/ui-egui/src/backstage.rs
@@ -14513,7 +14513,7 @@ msgstr "服务器证书尚未生效，MailCraft 无法连接。请检查此计�
 
 #. interface
 #: crates/ui-egui/src/dialogs.rs
-msgid "The server's copies stay as they are, and nothing is sent to the server. Undo brings them back."
+msgid "The server's copies stay as they are, and nothing is sent to the server. Undo brings them back until the next Send/Receive."
 msgstr ""
 
 #. interface
@@ -20652,6 +20652,12 @@ msgid "{n} copy on this computer of mail its server has would be removed"
 msgid_plural "{n} copies on this computer of mail its server has would be removed"
 msgstr[0] ""
 
+#. interface
+#: crates/ui-egui/src/dialogs.rs
+msgid "{n} copy you changed (its flag, categories, read mark or a to-do) is kept."
+msgid_plural "{n} copies you changed (their flag, categories, read mark or a to-do) are kept."
+msgstr[0] ""
+
 #. date and time, interface
 #: crates/i18n/src/date.rs crates/ui-egui/src/reminders.rs
 #, fuzzy
@@ -20777,6 +20783,12 @@ msgstr[0] "已选择 {n} 项"
 msgid "{n} journal entry"
 msgid_plural "{n} journal entries"
 msgstr[0] "{n} 条日记条目"
+
+#. interface
+#: crates/ui-egui/src/lib.rs
+msgid "{n} kept because it differs"
+msgid_plural "{n} kept because they differ"
+msgstr[0] ""
 
 #. interface
 #: crates/ui-egui/src/import_tree.rs

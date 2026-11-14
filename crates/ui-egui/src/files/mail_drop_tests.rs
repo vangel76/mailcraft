@@ -79,6 +79,30 @@ fn an_exported_folder_handed_back_twice_is_asked_about_and_not_doubled() {
 }
 
 #[test]
+fn the_question_names_where_the_mail_really_goes() {
+    let dir = scratch("where");
+    let eml = dir.join("one.eml");
+    std::fs::write(&eml, "From: Bo <bo@example.org>\r\nSubject: One\r\n\r\nHi\r\n").unwrap();
+    let path = eml.to_string_lossy().to_string();
+    let mut a = app();
+    let asked = |a: &MailApp| super::import_question(a, &path).text;
+    assert!(asked(&a).contains("into Inbox?"), "{}", asked(&a));
+    // An Outbox in view: its account's Drafts.
+    let local = a.session.mailbox.local_account();
+    if let Some(outbox) = a.session.mailbox.folder_of_kind(local, mailcraft_model::FolderKind::Outbox) {
+        a.session.view.folder = outbox;
+        let drafts = a.session.mailbox.folder_of_kind(local, mailcraft_model::FolderKind::Drafts).unwrap();
+        let name = crate::nav::folder_name(a.session.mailbox.folder(drafts).unwrap()).to_string();
+        assert!(asked(&a).contains(&format!("into {name}?")), "{}", asked(&a));
+    }
+    // A server's folder: this computer's Imported.
+    let imap = a.run("account.add", json!({"email": "ada@mail.example", "incoming": {"host": "imap.mail.example"}})).unwrap()["id"].as_u64().unwrap();
+    a.session.view.folder = a.session.mailbox.folder_of_kind(imap, mailcraft_model::FolderKind::Inbox).unwrap();
+    assert!(asked(&a).contains("into Imported?"), "{}", asked(&a));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_command_imports_without_a_question() {
     let mut a = app();
     let eml = "From: Bo <bo@example.org>\r\nTo: cy@example.org\r\nSubject: New\r\nMessage-ID: <new@example.org>\r\nDate: Tue, 14 Nov 2023 22:13:20 +0000\r\n\r\nHello\r\n";

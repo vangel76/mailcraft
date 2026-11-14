@@ -622,19 +622,35 @@ pub(crate) fn ask_next(app: &mut MailApp) {
 /// The name of the folder mail imported now goes to (#1401): the folder in view, or, for a
 /// folder of an account a server keeps, this computer's Imported folder.
 fn import_target(app: &MailApp) -> String {
+    use mailcraft_engine::io::{Lands, lands_in, mail_aimed_at};
     let mb = &app.session.mailbox;
-    let shown = mb.folder(app.session.view.folder).or_else(|| mb.inbox().and_then(|f| mb.folder(f)));
-    match shown {
-        Some(f) if mb.account(f.account).is_none_or(|a| a.kind == mailcraft_model::AccountKind::Local) => crate::nav::folder_name(f).to_string(),
+    // Where `file.import` with no folder named puts mail: the folder in view, never an Outbox
+    // (its account's Drafts or Inbox), and this computer's Drafts or Imported for a server's.
+    let landed = mail_aimed_at(mb, app.session.view.folder, None, true).ok().map(|aimed| lands_in(mb, aimed));
+    match landed {
+        Some(Lands::Folder(f)) => mb.folder(f).map_or_else(|| mailcraft_model::IMPORTED.to_string(), |f| crate::nav::folder_name(f).to_string()),
         _ => mailcraft_model::IMPORTED.to_string(),
     }
 }
 
+/// Largest mail file counted for the question before an import: a larger one is not read on the
+/// window's thread just to count it, and the question says no number.
+const MOST_COUNTED: u64 = 8 << 20;
+
 /// How many messages the mail file at `path` holds, read as the import would read it; `None`
-/// when it can't be read (the import then says why).
+/// when it can't be read (the import then says why) or is larger than [`MOST_COUNTED`].
 #[cfg(not(target_arch = "wasm32"))]
 fn messages_in_file(path: &str) -> Option<usize> {
-    let bytes = mailcraft_engine::io::read_regular_file(std::path::Path::new(path)).ok()?;
+    use std::io::Read as _;
+    let file = mailcraft_engine::io::regular_file(std::path::Path::new(path)).ok()?;
+    if file.metadata().ok()?.len() > MOST_COUNTED {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MOST_COUNTED.saturating_add(1)).read_to_end(&mut bytes).ok()?;
+    if u64::try_from(bytes.len()).map_or(true, |n| n > MOST_COUNTED) {
+        return None;
+    }
     mailcraft_engine::io::count_messages(path, &bytes)
 }
 
@@ -657,7 +673,7 @@ pub(crate) fn import_question(app: &MailApp, path: &str) -> crate::dialogs::Ques
             ),
             None => crate::i18n::fmt(tl!("Import the messages in {name} into {folder}?"), &[("name", &name), ("folder", &folder)]),
         };
-        let text = format!("{text} {}", tl!("Messages that are already in the mailbox are left out."));
+        let text = format!("{text} {}", tl!("Messages already in that folder are left out."));
         return crate::dialogs::Question::new(tl!("Import Mail"), text, tl!("Import"), Value::Null);
     }
     let (title, text) = if Format::from_extension(path) == Some(Format::Vcf) {

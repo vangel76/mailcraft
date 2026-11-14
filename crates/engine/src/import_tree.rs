@@ -10,12 +10,12 @@
 //! over a cap is left and said. The engine reads a directory only where there is a file system
 //! (`path`); the browser build and agents hand the files over as `entries`.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use mailcraft_model::{AccountKind, FolderKind, Id, Mailbox, Message};
 use serde_json::{Value, json};
 
+use crate::cmd::imported_dupes::Twins;
 use crate::cmd::{base64_decode, fail};
 use crate::{CmdError, Session, p};
 
@@ -458,9 +458,7 @@ pub fn finish(s: &mut Session, parsed: Parsed, dry: bool) -> Result<Value, CmdEr
         Some(account) => child(&mut s.mailbox, account, None, &top, !dry, &mut made)?,
         None => None,
     };
-    let mut have: std::collections::HashMap<Option<Id>, HashSet<crate::cmd::imported_dupes::Key>> = std::collections::HashMap::new();
-    // Every message the mailbox held before, wherever it is: the same mail is left out (#1401).
-    let before = crate::cmd::imported_dupes::index(&s.mailbox);
+    let mut have: std::collections::HashMap<Option<Id>, Twins> = std::collections::HashMap::new();
     for f in files {
         let mut names: Vec<String> = vec![top.clone()];
         names.extend(f.dirs.iter().cloned());
@@ -498,10 +496,10 @@ pub fn finish(s: &mut Session, parsed: Parsed, dry: bool) -> Result<Value, CmdEr
             w.skip(shown, "its folder couldn't be made");
             continue;
         }
-        // What this import put in the folder already (a file read twice); what the mailbox held
-        // before, anywhere, is in `before` (#1401). The same mail in two of the tree's folders
-        // comes into both, as it was kept.
-        let ids = have.entry(at).or_default();
+        // What the folder holds already, whole, and what this import put in it (a file read
+        // twice), compared by what it is (#1401). Only that folder: the same mail in two of the
+        // tree's folders, or elsewhere in the mailbox, comes into both, as it was kept.
+        let ids = have.entry(at).or_insert_with(|| at.map(|f| Twins::of(&s.mailbox, &[f])).unwrap_or_default());
         let slot = match tallies.iter().position(|t| t.path == shown) {
             Some(i) => i,
             None => {
@@ -514,11 +512,20 @@ pub fn finish(s: &mut Session, parsed: Parsed, dry: bool) -> Result<Value, CmdEr
         for id in f.ids {
             found_n += 1;
             let m = messages.next();
-            if let Some(id) = id
-                && (before.contains(&id) || !ids.insert(id))
-            {
+            // Compared whole when the message is here; a preview keeps only what it is by key.
+            let there = match (&m, &id) {
+                (Some(m), _) => ids.holds(m),
+                (None, Some(key)) => ids.may_hold(key),
+                (None, None) => false,
+            };
+            if there {
                 dups += 1;
                 continue;
+            }
+            match (&m, id) {
+                (Some(m), _) => ids.add(m),
+                (None, Some(key)) => ids.add_key(key),
+                (None, None) => {}
             }
             added += 1;
             if let (false, Some(folder), Some(mut m)) = (dry, at, m) {

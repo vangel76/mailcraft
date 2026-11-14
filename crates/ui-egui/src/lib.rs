@@ -5571,15 +5571,21 @@ fn feedback(id: &str, v: &Value) -> Option<String> {
         "people.fromMessage" if v.get("existing").and_then(Value::as_bool) == Some(true) => Some(tl!("Already in your contacts").to_string()),
         "folder.empty" => n("removed").map(|c| tln!(c, "{n} message removed", "{n} messages removed")),
         // Copies only this computer had of mail its server has (#1401).
-        "mail.removeImportedDuplicates" => Some(match (n("removed").unwrap_or(0), v.get("preview").and_then(Value::as_bool) == Some(true)) {
-            (0, _) => tl!("No copies on this computer of mail its server has were found").to_string(),
-            (c, true) => tln!(
-                c,
-                "{n} copy on this computer of mail its server has would be removed",
-                "{n} copies on this computer of mail its server has would be removed"
-            ),
-            (c, false) => {
-                tln!(c, "{n} copy on this computer of mail its server has removed", "{n} copies on this computer of mail its server has removed")
+        "mail.removeImportedDuplicates" => Some({
+            let said = match (n("removed").unwrap_or(0), v.get("preview").and_then(Value::as_bool) == Some(true)) {
+                (0, _) => tl!("No copies on this computer of mail its server has were found").to_string(),
+                (c, true) => tln!(
+                    c,
+                    "{n} copy on this computer of mail its server has would be removed",
+                    "{n} copies on this computer of mail its server has would be removed"
+                ),
+                (c, false) => {
+                    tln!(c, "{n} copy on this computer of mail its server has removed", "{n} copies on this computer of mail its server has removed")
+                }
+            };
+            match n("kept").filter(|c| *c > 0) {
+                Some(c) => format!("{said}; {}", tln!(c, "{n} kept because it differs", "{n} kept because they differ")),
+                None => said,
             }
         }),
         // An appointment that goes into another calendar of its account is made there first, and

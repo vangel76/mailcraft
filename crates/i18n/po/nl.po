@@ -7547,6 +7547,11 @@ msgid "Messages (.eml, .mbox), calendars (.ics) and contacts (.vcf)"
 msgstr "Berichten (.eml, .mbox), agenda's (.ics) en contactpersonen (.vcf)"
 
 #. interface
+#: crates/ui-egui/src/files.rs
+msgid "Messages already in that folder are left out."
+msgstr ""
+
+#. interface
 #: crates/ui-egui/src/backstage.rs
 #, fuzzy
 msgid "Messages are shown without running anything in them, and the pictures a message keeps on the web are downloaded only when you ask. Passwords are kept in memory only while the app is open."
@@ -7599,11 +7604,6 @@ msgstr "Van \"{name}\" naar \"{to}\" verplaatste berichten staan ook nog in \"{n
 #, fuzzy
 msgid "Messages on a Light Background"
 msgstr "Berichten op een lichte achtergrond"
-
-#. interface
-#: crates/ui-egui/src/files.rs
-msgid "Messages that are already in the mailbox are left out."
-msgstr ""
 
 #. interface
 #: crates/ui-egui/src/backstage.rs
@@ -14395,7 +14395,7 @@ msgstr "Het certificaat van de server is nog niet geldig, dus MailCraft maakt er
 
 #. interface
 #: crates/ui-egui/src/dialogs.rs
-msgid "The server's copies stay as they are, and nothing is sent to the server. Undo brings them back."
+msgid "The server's copies stay as they are, and nothing is sent to the server. Undo brings them back until the next Send/Receive."
 msgstr ""
 
 #. interface
@@ -20492,6 +20492,13 @@ msgid_plural "{n} copies on this computer of mail its server has would be remove
 msgstr[0] ""
 msgstr[1] ""
 
+#. interface
+#: crates/ui-egui/src/dialogs.rs
+msgid "{n} copy you changed (its flag, categories, read mark or a to-do) is kept."
+msgid_plural "{n} copies you changed (their flag, categories, read mark or a to-do) are kept."
+msgstr[0] ""
+msgstr[1] ""
+
 #. date and time, interface
 #: crates/i18n/src/date.rs crates/ui-egui/src/reminders.rs
 #, fuzzy
@@ -20632,6 +20639,13 @@ msgstr[1] "{n} items geselecteerd"
 #: crates/ui-egui/src/import_pst.rs
 msgid "{n} journal entry"
 msgid_plural "{n} journal entries"
+msgstr[0] ""
+msgstr[1] ""
+
+#. interface
+#: crates/ui-egui/src/lib.rs
+msgid "{n} kept because it differs"
+msgid_plural "{n} kept because they differ"
 msgstr[0] ""
 msgstr[1] ""
 
