@@ -71,6 +71,9 @@ mod hidden_selection_tests;
 pub mod imap_again;
 #[cfg(test)]
 mod imap_outbox_tests;
+pub mod imported_dupes;
+#[cfg(test)]
+mod imported_dupes_tests;
 pub mod item_from_message;
 #[cfg(test)]
 mod item_from_message_tests;
@@ -195,6 +198,7 @@ pub fn registry() -> Registry {
     v.extend(zones::specs());
     v.extend(people::specs());
     v.extend(people_merge::specs());
+    v.extend(imported_dupes::specs());
     v.extend(tasks::specs());
     v.extend(item_from_message::specs());
     v.extend(notes::specs());
