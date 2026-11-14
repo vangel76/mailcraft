@@ -14,7 +14,8 @@ const NOW: i64 = 1_791_993_600;
 /// A window with an IMAP account and a Microsoft account; their ids.
 fn app() -> (MailApp, Id, Id) {
     let mut a = MailApp::new(Session::at(mailcraft_model::Mailbox::default(), NOW, 0), Services::default());
-    (a.autosave, a.auto_sync) = (false, false);
+    a.autosave = false;
+    a.session.driver.set_auto_sync(false);
     let add = |a: &mut MailApp, params: Value| a.session.run("account.add", &params).unwrap()["id"].as_u64().unwrap();
     let imap = add(
         &mut a,

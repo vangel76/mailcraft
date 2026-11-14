@@ -233,7 +233,7 @@ fn a_message_as_its_server_delivered_it_is_answered_from_the_alias_and_sent_thro
     // To a list, the alias in Bcc: only its server's headers say which address it came to.
     let raw = "X-Original-To: support@product.example\r\nDelivered-To: jorgen@company.example\r\nFrom: Customer <customer@example.net>\r\n\
                To: list@example.net\r\nSubject: Licence\r\nMessage-ID: <797.2@example.net>\r\nDate: Tue, 01 Jul 2003 10:52:37 +0200\r\n\r\nWhich plan?\r\n";
-    let mut m = mailcraft_mime::parse(raw.as_bytes());
+    let mut m = mailcraft_mime_model::parse(raw.as_bytes());
     (m.account, m.folder) = (id, s.mailbox.folder_of_kind(id, FolderKind::Inbox).unwrap());
     let original = s.mailbox.add_message(m).unwrap();
     s.run("mail.reply", &json!({"id": original})).unwrap();

@@ -223,11 +223,7 @@ fn delivery_headers_below_a_received_header_are_never_read() {
     // nor a sender address: the X-Original-To below its Received line is not looked at.
     let m = Message {
         from: customer.clone(),
-        headers: headers(&[
-            ("Delivered-To", "ada@mail.internal.example"),
-            ("Received", "from a"),
-            ("X-Original-To", "ada@company.example"),
-        ]),
+        headers: headers(&[("Delivered-To", "ada@mail.internal.example"), ("Received", "from a"), ("X-Original-To", "ada@company.example")]),
         ..Default::default()
     };
     assert_eq!(a.reply_from(&m), "");

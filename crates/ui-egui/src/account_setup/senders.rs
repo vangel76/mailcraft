@@ -75,7 +75,9 @@ impl Senders {
             .collect();
         let kept = match clean_sender_addresses(main, &typed) {
             Ok(kept) => kept,
-            Err(SenderProblem::NotAnAddress(address)) if address.trim().is_empty() => return Some(tl!("a sender address has no e-mail address").to_string()),
+            Err(SenderProblem::NotAnAddress(address)) if address.trim().is_empty() => {
+                return Some(tl!("a sender address has no e-mail address").to_string());
+            }
             Err(SenderProblem::NotAnAddress(address)) => {
                 return Some(fmt(tl!("\"{address}\" isn't an e-mail address"), &[("address", &shown(&address, 80))]));
             }

@@ -160,7 +160,9 @@ impl Account {
         // one came with the message and may be planted. (A server that writes none leaves nothing
         // to read.) The first of the account's own addresses ends the search.
         let mut seen = 0u8;
-        for (name, value) in &m.headers {
+        // (All of the header lines, in order: these are in its header block, not among those it
+        // keeps for reading by name.)
+        for (name, value) in &m.all_headers() {
             let name = name.trim();
             if name.eq_ignore_ascii_case("received") {
                 break;
