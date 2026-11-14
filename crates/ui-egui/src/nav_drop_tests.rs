@@ -43,7 +43,7 @@ fn app() -> (MailApp, Id) {
     }
     let mut app = MailApp::new(s, Services::default());
     app.autosave = false;
-    app.auto_sync = false;
+    app.session.driver.set_auto_sync(false);
     (app, id)
 }
 
