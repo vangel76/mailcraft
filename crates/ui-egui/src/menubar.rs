@@ -213,6 +213,7 @@ const FOLDER: &[Row] = &[
     Cmd("folder.empty"),
     Cmd("mail.markAllRead"),
     Cmd("rules.run"),
+    Cmd("mail.removeImportedDuplicates"),
     Cmd("folder.properties"),
     Sep,
     Cmd("sync.request"),
