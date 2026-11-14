@@ -216,6 +216,10 @@ fn the_sender_addresses_question_names_the_names_and_the_replacement() {
     let list = json!([{"email": "support@example.org", "displayName": "Example Support"}, {"email": "sales@example.org"}]);
     let d = describe(&s, "account.setSenderAddresses", &json!({"id": id, "addresses": list}));
     assert!(d.contains("whole list") && d.contains("support@example.org (shown as Example Support)") && d.contains("sales@example.org"), "{d}");
+    // A signature the owner picked is part of the question too.
+    let list = json!([{"email": "support@example.org", "displayName": "Example Support", "signature": "Support"}, {"email": "sales@example.org", "signature": "Sales"}]);
+    let d = describe(&s, "account.setSenderAddresses", &json!({"id": id, "addresses": list}));
+    assert!(d.contains("(shown as Example Support, signature Support)") && d.contains("sales@example.org (signature Sales)"), "{d}");
     let d = describe(&s, "account.setSenderAddresses", &json!({"id": id, "addresses": []}));
     assert!(d.contains("whole list") && d.contains("none"), "{d}");
 }

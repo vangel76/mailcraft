@@ -40,9 +40,10 @@ impl Senders {
         Some(Senders { was: rows.clone(), rows })
     }
 
-    /// The rows that say something: an empty one the owner added and left is no address.
+    /// The rows that say something: an empty one the owner added and left is no address (one with
+    /// only a signature chosen says something, and is refused for its missing address).
     fn filled(&self) -> Vec<&Row> {
-        self.rows.iter().filter(|r| !(r.email.trim().is_empty() && r.name.trim().is_empty())).collect()
+        self.rows.iter().filter(|r| !(r.email.trim().is_empty() && r.name.trim().is_empty() && r.signature.is_empty())).collect()
     }
 
     /// `account.setSenderAddresses` for account `id`, when the page changed them.
@@ -74,6 +75,7 @@ impl Senders {
             .collect();
         let kept = match clean_sender_addresses(main, &typed) {
             Ok(kept) => kept,
+            Err(SenderProblem::NotAnAddress(address)) if address.trim().is_empty() => return Some(tl!("a sender address has no e-mail address").to_string()),
             Err(SenderProblem::NotAnAddress(address)) => {
                 return Some(fmt(tl!("\"{address}\" isn't an e-mail address"), &[("address", &shown(&address, 80))]));
             }
@@ -90,7 +92,7 @@ impl Senders {
 
     /// Saved: what the page has is what the account has.
     pub(crate) fn saved(&mut self) {
-        self.rows.retain(|r| !(r.email.trim().is_empty() && r.name.trim().is_empty()));
+        self.rows.retain(|r| !(r.email.trim().is_empty() && r.name.trim().is_empty() && r.signature.is_empty()));
         self.was = self.rows.clone();
     }
 

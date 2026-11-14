@@ -1657,10 +1657,14 @@ fn what_it_does(s: &Session, id: &str, params: &Value) -> String {
                     list.iter()
                         .filter_map(|x| {
                             let email = plain(x.get("email").and_then(Value::as_str)?);
-                            // The name recipients see is part of what is asked.
-                            Some(match x.get("displayName").and_then(Value::as_str).map(plain).filter(|n| !n.is_empty()) {
-                                Some(name) => format!("{email} (shown as {name})"),
-                                None => email,
+                            // The name recipients see and the signature are part of what is asked.
+                            let name = x.get("displayName").and_then(Value::as_str).map(plain).filter(|n| !n.is_empty());
+                            let signature = x.get("signature").and_then(Value::as_str).map(plain).filter(|n| !n.is_empty());
+                            Some(match (name, signature) {
+                                (None, None) => email,
+                                (Some(n), None) => format!("{email} (shown as {n})"),
+                                (None, Some(g)) => format!("{email} (signature {g})"),
+                                (Some(n), Some(g)) => format!("{email} (shown as {n}, signature {g})"),
                             })
                         })
                         .collect()

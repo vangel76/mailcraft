@@ -19,7 +19,7 @@ pub const MAX_SENDER_ADDRESSES: usize = 50;
 
 /// Headers that say which of the owner's addresses a message was delivered to, read after its
 /// To and Cc lines: the address it was sent to before the server took it to the mailbox, and the
-/// mailbox's own. Read top down, the topmost value of each only.
+/// mailbox's own. Read top down above the first `Received` header, the topmost value of each only.
 const DELIVERED_TO: [&str; 2] = ["x-original-to", "delivered-to"];
 
 /// One of an account's other sender addresses: the address, the name recipients see beside it
@@ -138,9 +138,9 @@ impl Account {
     /// the account's addresses found among the original's From (a message the owner sent from
     /// one), To and Cc; else the first of its sender addresses in the original's `X-Original-To`
     /// and `Delivered-To` headers (mail to an alias in Bcc). Only the topmost value of each header
-    /// is read, top down, as the owner's server wrote them above what came with the message,
-    /// and the search stops at the account's own address: a value further down may have been
-    /// planted by the sender. The address as
+    /// is read, top down and only above the first `Received` header (the owner's server writes
+    /// them above its own; what is below came with the message and may be planted), and the
+    /// search stops at the account's own address. The address as
     /// the account keeps it, or `""` for its own address, also when none is found. Only whole
     /// addresses match, in any letter case: `ada+news@` is not `ada@`.
     pub fn reply_from(&self, m: &Message) -> String {
@@ -155,12 +155,17 @@ impl Account {
                 return s.email.clone();
             }
         }
-        // Only the topmost value of each header counts, and the headers are read top down: what
-        // the owner's server wrote sits above what came with the message, which may be planted.
-        // The first of the account's own addresses ends the search.
+        // Only the topmost value of each header counts, and only above the first `Received`: the
+        // owner's server writes these headers above its own `Received` line, so whatever sits below
+        // one came with the message and may be planted. (A server that writes none leaves nothing
+        // to read.) The first of the account's own addresses ends the search.
         let mut seen = 0u8;
         for (name, value) in &m.headers {
-            let Some(at) = DELIVERED_TO.iter().position(|d| name.trim().eq_ignore_ascii_case(d)) else { continue };
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("received") {
+                break;
+            }
+            let Some(at) = DELIVERED_TO.iter().position(|d| name.eq_ignore_ascii_case(d)) else { continue };
             let bit = 1u8 << at;
             if seen & bit != 0 {
                 continue;

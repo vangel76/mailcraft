@@ -61,6 +61,20 @@ fn an_address_that_isnt_one_keeps_the_page_open_and_saves_nothing() {
 }
 
 #[test]
+fn a_row_with_a_name_or_signature_but_no_address_is_refused_in_words() {
+    let (mut a, imap, _) = app();
+    let mut w = AccountSetup::open(&a, &json!({"id": imap})).unwrap();
+    w.senders.as_mut().unwrap().rows = vec![row("", "Product Support")];
+    assert!(!w.act(&mut a, Action::Go));
+    assert_eq!(w.error, "a sender address has no e-mail address");
+    // A row where only a signature was chosen is not dropped without a word.
+    w.senders.as_mut().unwrap().rows = vec![Row { email: String::new(), name: String::new(), signature: "Work".into() }];
+    assert!(!w.act(&mut a, Action::Go));
+    assert_eq!(w.error, "a sender address has no e-mail address");
+    assert!(a.session.mailbox.account(imap).unwrap().sender_addresses.is_empty());
+}
+
+#[test]
 fn a_refused_sender_address_leaves_the_server_settings_unsaved() {
     // Save checks the addresses before `account.edit`: nothing of the page is half saved.
     let (mut a, imap, _) = app();

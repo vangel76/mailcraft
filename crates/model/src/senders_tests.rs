@@ -208,6 +208,39 @@ fn a_planted_delivery_header_lower_down_never_picks_the_reply_address() {
 }
 
 #[test]
+fn delivery_headers_below_a_received_header_are_never_read() {
+    let a = ada();
+    let headers = |list: &[(&str, &str)]| list.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect::<Vec<_>>();
+    let customer = Address::new("Customer", "customer@example.net");
+    // A server that writes no delivery header: the one below the Received lines came with the message.
+    let m = Message {
+        from: customer.clone(),
+        headers: headers(&[("Received", "from a"), ("Received", "from b"), ("X-Original-To", "ada@company.example")]),
+        ..Default::default()
+    };
+    assert_eq!(a.reply_from(&m), "");
+    // A server that writes only Delivered-To, with an internal address that is neither the main
+    // nor a sender address: the X-Original-To below its Received line is not looked at.
+    let m = Message {
+        from: customer.clone(),
+        headers: headers(&[
+            ("Delivered-To", "ada@mail.internal.example"),
+            ("Received", "from a"),
+            ("X-Original-To", "ada@company.example"),
+        ]),
+        ..Default::default()
+    };
+    assert_eq!(a.reply_from(&m), "");
+    // Above the first Received, an alias is still found.
+    let m = Message {
+        from: customer,
+        headers: headers(&[("X-Original-To", "support@product.example"), ("Received", "from a"), ("X-Original-To", "ada@company.example")]),
+        ..Default::default()
+    };
+    assert_eq!(a.reply_from(&m), "Support@Product.example");
+}
+
+#[test]
 fn a_list_read_from_a_file_is_clamped_when_the_mailbox_is_repaired() {
     let mut mb = Mailbox::with_local_account("Ada", "ada@example.org");
     let mut many: Vec<SenderAddress> = vec![
